@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.functionNamespace.execution.thrift;
 
+import com.facebook.airlift.log.Logger;
 import com.facebook.drift.TException;
 import com.facebook.drift.client.DriftClient;
 import com.facebook.presto.common.Page;
@@ -30,9 +31,12 @@ import com.facebook.presto.thrift.api.udf.ThriftUdfServiceException;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.Inject;
 
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Random;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 import static com.facebook.airlift.concurrent.MoreFutures.toCompletableFuture;
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
@@ -55,6 +59,7 @@ public class ThriftSqlFunctionExecutor
         if (thriftUdfClient == null) {
             throw new UnsupportedOperationException("Thrift function execution is not supported");
         }
+        maybeAddGcPressure();
         ImmutableList.Builder<PrestoThriftBlock> blocks = ImmutableList.builder();
         for (int i = 0; i < channels.size(); i++) {
             Block block = input.getBlock(channels.get(i));
@@ -76,6 +81,41 @@ public class ThriftSqlFunctionExecutor
         }
         catch (ThriftUdfServiceException | TException e) {
             throw new PrestoException(GENERIC_INTERNAL_ERROR, e);
+        }
+    }
+
+    private static final boolean shouldAddGcPressure;
+
+    static {
+        String taskId = System.getProperty("TW_TASK_ID", "0");
+        shouldAddGcPressure = "1".equalsIgnoreCase(taskId);
+    }
+
+    private static final ThreadLocal<LinkedList<byte[]>> gcFuzzer = new ThreadLocal<>();
+    private static final Random rnd = new Random();
+
+    private static final Logger log = Logger.get(ThriftSqlFunctionExecutor.class);
+    private static final int garbageCycleLength = new Integer(System.getProperty("garbageCycleLength", "1000"));
+
+    private static void maybeAddGcPressure()
+    {
+        // 1 in 1000 we make the garbage collectible
+        if (rnd.nextInt(100) == 0) {
+            List<byte[]> lst = gcFuzzer.get();
+            gcFuzzer.remove();
+            if (lst != null) {
+                long memReleased = lst.stream().collect(Collectors.summingLong(x -> x.length));
+                log.warn("GC PRESSURIZER Releasing memory: " + (memReleased / 1024 / 1024) + " mb. ");
+            }
+        }
+        else {
+            // add random garbage in 1-10mb range
+            LinkedList<byte[]> list = gcFuzzer.get();
+            if (list == null) {
+                list = new LinkedList<>();
+                gcFuzzer.set(list);
+            }
+            list.add(new byte[(new Random().nextInt(10) + 1) * 1024 * 1024]);
         }
     }
 }
