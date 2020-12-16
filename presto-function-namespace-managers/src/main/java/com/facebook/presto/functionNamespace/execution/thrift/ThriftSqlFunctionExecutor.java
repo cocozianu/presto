@@ -84,23 +84,30 @@ public class ThriftSqlFunctionExecutor
         }
     }
 
-    private static final boolean shouldAddGcPressure;
+    private static final Logger log = Logger.get(ThriftSqlFunctionExecutor.class);
 
+    private static final boolean shouldAddGcPressure;
     static {
-        String taskId = System.getProperty("TW_TASK_ID", "0");
+        log.warn("Configuring gcPressure");
+        String taskId = System.getenv().getOrDefault("TW_TASK_ID", "0");
         shouldAddGcPressure = "1".equalsIgnoreCase(taskId);
+        log.warn("Got taskId: " + taskId + " shouldAddGcPressure: " + shouldAddGcPressure);
     }
 
     private static final ThreadLocal<LinkedList<byte[]>> gcFuzzer = new ThreadLocal<>();
     private static final Random rnd = new Random();
 
-    private static final Logger log = Logger.get(ThriftSqlFunctionExecutor.class);
     private static final int garbageCycleLength = new Integer(System.getProperty("garbageCycleLength", "1000"));
+    static {
+        if (shouldAddGcPressure) {
+            log.warn("gcPressure will work with garbageCycleLength: " + garbageCycleLength);
+        }
+    }
 
     private static void maybeAddGcPressure()
     {
         // 1 in 1000 we make the garbage collectible
-        if (rnd.nextInt(100) == 0) {
+        if (rnd.nextInt(garbageCycleLength) == 0) {
             List<byte[]> lst = gcFuzzer.get();
             gcFuzzer.remove();
             if (lst != null) {
